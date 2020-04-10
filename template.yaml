@@ -1,0 +1,295 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Parameters:
+    ProjectName:
+        Type: String
+        Default: SlackUploadFileTransfer
+    RolePath:
+        Description: "Path of IAM Role"
+        Type: String
+        Default: "/Lambda/SlackUploadFileTransfer/"
+    UploadType:
+        Type: String
+        Default: "box"
+    BoxClientId:
+        Type: String
+        NoEcho: true
+        Default: ""
+    BoxClientSecret:
+        Type: String
+        NoEcho: true
+        Default: ""
+    BoxEnterpriseId:
+        Type: String
+    BoxJwtKeyId:
+        Type: String
+        NoEcho: true
+        Default: ""
+    BoxPrivateKeyId:
+        Type: String
+        NoEcho: true
+        Default: ""
+    BoxFolderId:
+        Type: String
+    BoxUser:
+        Type: String
+        Default: "Appuser"
+    # --------------------------------------------------------------------------
+    # Slack
+    # --------------------------------------------------------------------------
+    SlackToken:
+        Type: String
+        NoEcho: true
+    SlackBotToken:
+        Type: String
+        NoEcho: true
+    SlackSigningSecret:
+        Type: String
+        NoEcho: true
+    SlackChannelIds:
+        Type: String
+        Default: ""
+    # --------------------------------------------------------------------------
+    # GSuite用API設定
+    # --------------------------------------------------------------------------
+    GSuiteType:
+        Description: "GSuite OAuth - Type"
+        Type: String
+        Default: "service_account"
+    GSuiteProjectId:
+        Description: "GSuite OAuth - Project Id"
+        Type: String
+        Default: ""
+    GSuitePrivateKeyId:
+        Description: "GSuite OAuth - Private Key Id"
+        Type: String
+        Default: ""
+    GSuitePrivateKey:
+        Description: "GSuite OAuth - Private Key"
+        NoEcho: true
+        Type: String
+        Default: ""
+    GSuiteClientEmail:
+        Description: "GSuite OAuth - Client email address"
+        Type: String
+        Default: ""
+    GSuiteClientId:
+        Description: "GSuite OAuth - Client Id"
+        Type: String
+        Default: ""
+    GSuiteAuthUri:
+        Description: "GSuite OAuth - OAuth2 Authorization URL"
+        Type: String
+        Default: "https://accounts.google.com/o/oauth2/auth"
+    GSuiteTokenUri:
+        Description: "GSuite OAuth - OAuth2 Toke URL"
+        Type: String
+        Default: "https://oauth2.googleapis.com/token"
+    GSuiteAuthProviderX509CertUrl:
+        Description: "GSuite OAuth - Authorization Provider Certification URL"
+        Type: String
+        Default: "https://www.googleapis.com/oauth2/v1/certs"
+    GSuiteClientX509CertUrl:
+        Description: "GSuite OAuth - X.509 Client Certification URL"
+        Type: String
+        Default: ""
+    GSuiteParentId:
+        Type: String
+        Default: ""
+    GSuiteDomain:
+        Type: String
+        Default: ""
+Resources:
+    FunctionRole:
+        Description: "[Create] IAM Role"
+        Type: 'AWS::IAM::Role'
+        Properties:
+            Description: Role for Slack Upload File Transfer
+            RoleName: !Sub "${ProjectName}-Receiver-Role"
+            Path: !Ref RolePath
+            AssumeRolePolicyDocument:
+                Statement:
+                  - Action: 'sts:AssumeRole'
+                    Effect: Allow
+                    Principal:
+                        Service: lambda.amazonaws.com
+                  - Action: 'sts:AssumeRole'
+                    Effect: Allow
+                    Principal:
+                        Service: apigateway.amazonaws.com
+            Policies:
+              - PolicyName: !Sub "${ProjectName}-Receiver-Policy"
+                PolicyDocument:
+                    Version: "2012-10-17"
+                    Statement:
+                      - Effect: Allow
+                        Action:
+                          - "logs:CreateLogGroup"
+                          - "logs:CreateLogStream"
+                          - "logs:PutLogEvents"
+                          - "lambda:InvokeFunction"
+                          - "kms:Decrypt"
+                          - "ssm:GetParameter"
+                        Resource: '*'
+    # Lambda用のKMSキーの作成
+    KmsKey:
+        Description: "[Create] KMS Key for Lambda functions"
+        Type: 'AWS::KMS::Key'
+        Properties:
+            Description: Encrypt/Decrypt enviroment parameter
+            Enabled: true
+            KeyPolicy:
+                Id: key-default-1
+                Version: 2012-10-17
+                Statement:
+                  - Sid: Enable IAM Permission
+                    Effect: Allow
+                    Action: kms:*
+                    Resource: "*"
+                    Principal:
+                        AWS: !Join [ "", [ "arn:aws:iam::", !Ref "AWS::AccountId", ":root" ] ]
+                  - Sid: Allow use of the key from Lambda
+                    Effect: Allow
+                    Principal:
+                        AWS: !GetAtt FunctionRole.Arn
+                    Action:
+                      - kms:Decrypt
+                      - kms:Encrypt
+                    Resource: "*"
+        DependsOn: FunctionRole
+    KmsKeyAlias:
+        Type: 'AWS::KMS::Alias'
+        Properties:
+            AliasName: !Join ["/", ["alias", "lambda", !Ref ProjectName]]
+            TargetKeyId: !Ref KmsKey
+        DependsOn: KmsKey
+    # KSM暗号化用CloudFormationカスタムリソースの作成
+    EncrypterFunctionExecutionRole:
+        Type: 'AWS::IAM::Role'
+        Properties:
+            Description: Role for the Slack Upload File Transfer Encrypter
+            RoleName: !Sub "${ProjectName}-Encrypter-Role"
+            AssumeRolePolicyDocument:
+                Statement:
+                  - Action: 'sts:AssumeRole'
+                    Effect: Allow
+                    Principal:
+                        Service: lambda.amazonaws.com
+            Policies:
+              - PolicyDocument:
+                    Statement:
+                      - Action:
+                          - kms:Encrypt
+                        Effect: Allow
+                        Resource: '*'
+                PolicyName: !Sub "${ProjectName}-Encrypter-Policy"
+            Path: !Ref RolePath
+        DependsOn: KmsKey
+    EncrypterFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            CodeUri: encrypter/
+            Handler: app.lambda_handler
+            FunctionName: !Sub "${ProjectName}-Encrypter"
+            MemorySize: 128
+            Role: !GetAtt EncrypterFunctionExecutionRole.Arn
+            Runtime: python3.6
+            Timeout: 120
+        DependsOn: EncrypterFunctionExecutionRole
+    # --------------------------------------------------------------------------
+    # 環境変数の暗号化
+    # --------------------------------------------------------------------------
+    BoxCredential:
+        Description: "[Encryption] Box Credentail"
+        Type: Custom::Encrypter
+        Properties:
+            ServiceToken: !GetAtt EncrypterFunction.Arn
+            KeyId: !Ref KmsKey
+            Plaintext: !Sub '{"boxAppSettings": {"clientID": "${BoxClientId}","clientSecret": "${BoxClientSecret}","appAuth": {"publicKeyID": "${BoxJwtKeyId}","privateKey": "${BoxPrivateKeyId}"}},"enterpriseID": "${BoxEnterpriseId}"}'
+            region: !Sub "${AWS::Region}"
+        DependsOn: EncrypterFunction
+    GSuiteCredential:
+        Description: "[Encryption] GSuite Credential"
+        Type: Custom::Encrypter
+        Properties:
+            ServiceToken: !GetAtt EncrypterFunction.Arn
+            KeyId: !Ref KmsKey
+            Plaintext: !Sub '{"type": "${GSuiteType}","project_id": "${GSuiteProjectId}","private_key_id": "${GSuitePrivateKeyId}","private_key": "${GSuitePrivateKey}","client_email": "${GSuiteClientEmail}","client_id": "${GSuiteClientId}","auth_uri": "${GSuiteAuthUri}","token_uri": "${GSuiteTokenUri}","auth_provider_x509_cert_url": "${GSuiteAuthProviderX509CertUrl}","client_x509_cert_url": "${GSuiteClientX509CertUrl}"}'
+            region: !Sub "${AWS::Region}"
+        DependsOn: EncrypterFunction
+    SlackAPIToken:
+        Description: "[Encryption] Slack Token"
+        Type: Custom::Encrypter
+        Properties:
+            ServiceToken: !GetAtt EncrypterFunction.Arn
+            KeyId: !Ref KmsKey
+            Plaintext: !Ref SlackToken
+            region: !Sub "${AWS::Region}"
+        DependsOn: EncrypterFunction
+    SlackBotAPIToken:
+        Description: "[Encryption] Slack Token"
+        Type: Custom::Encrypter
+        Properties:
+            ServiceToken: !GetAtt EncrypterFunction.Arn
+            KeyId: !Ref KmsKey
+            Plaintext: !Ref SlackBotToken
+            region: !Sub "${AWS::Region}"
+        DependsOn: EncrypterFunction
+    # --------------------------------------------------------------------------
+    # SSM Parameter upload
+    # --------------------------------------------------------------------------
+    SSMParameterGSuite:
+        Type: AWS::SSM::Parameter
+        Properties:
+            Type: String
+            Name: !Sub "/${ProjectName}/GSuite"
+            Value: !GetAtt GSuiteCredential.Value
+    SSMParameterBox:
+        Type: AWS::SSM::Parameter
+        Properties:
+            Type: String
+            Name: !Sub "/${ProjectName}/Box"
+            Value: !GetAtt BoxCredential.Value
+    # --------------------------------------------------------------------------
+    # Function作成
+    # --------------------------------------------------------------------------
+    ReceiverFunction:
+        Type: AWS::Serverless::Function
+        Properties:
+            CodeUri: receiver/
+            Handler: app.lambda_handler
+            FunctionName: !Sub "${ProjectName}-Receiver"
+            Runtime: python3.6
+            KmsKeyArn: !GetAtt KmsKey.Arn
+            Role: !GetAtt FunctionRole.Arn
+            Timeout: 900
+            Environment:
+                Variables:
+                    BOX_FOLDER_ID: !Ref BoxFolderId
+                    BOX_USER: !Ref BoxUser
+                    GSUITE_PARENT_ID: !Ref GSuiteParentId
+                    GSUITE_DOMAIN: !Ref GSuiteDomain
+                    SLACK_TOKEN: !GetAtt SlackAPIToken.Value
+                    SLACK_BOT_TOKEN: !GetAtt SlackBotAPIToken.Value
+                    SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
+                    SLACK_CHANNEL_IDS: !Ref SlackChannelIds
+                    REGION: !Sub "${AWS::Region}"
+                    UPLOAD_TYPE: !Ref UploadType
+            Events:
+                Receiver:
+                    Type: Api
+                    Properties:
+                        Path: /event
+                        Method: post
+    # --------------------------------------------------------------------------
+    # CloudWatchLogs
+    # --------------------------------------------------------------------------
+    ReceiverFunctionLogGroup:
+        Type: AWS::Logs::LogGroup
+        Properties:
+            LogGroupName: !Sub "/aws/lambda/${ProjectName}-Receiver"
+            RetentionInDays: 3
+Outputs:
+    ReceiverApi:
+        Description: "API Gateway endpoint URL"
+        Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/event/"

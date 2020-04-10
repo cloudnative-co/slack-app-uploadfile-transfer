@@ -1,0 +1,4 @@
+git+https://github.com/cloudnative-co/python-box-sdk.git#egg=BoxSDK-Cn
+git+https://github.com/cloudnative-co/slack-sdk.git
+git+https://github.com/cloudnative-co/gsuite_sdk.git
+objectpath

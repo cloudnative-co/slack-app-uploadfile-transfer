@@ -1,0 +1,44 @@
+#!/bin/sh
+. ./parameter.cfg
+sam build
+cd .aws-sam/build
+aws cloudformation package \
+    --region $REGION \
+    --template-file template.yaml \
+    --s3-prefix $PROJECT_NAME \
+    --s3-bucket $S3_BUCKET \
+    --output-template-file packaged.yaml
+aws cloudformation deploy \
+    --stack-name $PROJECT_NAME \
+    --template-file packaged.yaml \
+    --region $REGION \
+    --capabilities CAPABILITY_NAMED_IAM  \
+    --s3-bucket $S3_BUCKET \
+    --s3-prefix $PROJECT_NAME \
+    --parameter-overrides \
+        ProjectName=$PROJECT_NAME \
+        RolePath=$ROLE_PATH \
+        UploadType=$UPLOAD_TYPE \
+        SlackSigningSecret=$SLACK_SIGNING_SECRET \
+        SlackToken=$SLACK_TOKEN \
+        SlackBotToken=$SLACK_BOT_TOKEN \
+        SlackChannelIds=$SLACK_CHANNEL_IDS \
+        BoxClientId=$BOX_CLIENT_ID \
+        BoxClientSecret=$BOX_CLIENT_SECRET \
+        BoxEnterpriseId=$BOX_ENTERPRISE_ID \
+        BoxJwtKeyId=$BOX_JWT_KEY_ID \
+        BoxFolderId=$BOX_FOLDER_ID \
+        BoxUser=$BOX_USER \
+        BoxPrivateKeyId="$BOX_PRIVATE_KEY_ID" \
+        GSuiteType=$GSUITE_TYPE \
+        GSuiteProjectId=$GSUITE_PROJECT_ID \
+        GSuitePrivateKeyId=$GSUITE_PRIVATE_KEY_ID \
+        GSuitePrivateKey="$GSUITE_PRIVATE_KEY" \
+        GSuiteClientEmail=$GSUITE_CLIENT_EMAIL \
+        GSuiteClientId=$GSUITE_CLIENT_ID \
+        GSuiteAuthUri=$GSUITE_AUTH_URI \
+        GSuiteTokenUri=$GSUITE_TOKEN_URI \
+        GSuiteAuthProviderX509CertUrl=$GSUITE_AUTH_PROVIDER_X509_CERT_URL \
+        GSuiteClientX509CertUrl=$GSUITE_CLIENT_X509_CERT_URI \
+        GSuiteParentId=$GSUITE_PARENT_ID \
+        GSuiteDomain=$GSUITE_DOMAIN
